@@ -320,7 +320,7 @@ ipcMain.handle('select-file', async (event, filters) => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: filters || [
-      { name: 'Media Files', extensions: ['mp4', 'mkv', 'avi', 'm4v', 'mov', 'mp3', 'wav', 'flac'] },
+      { name: 'Media Files', extensions: ['mp4', 'mkv', 'avi', 'm4v', 'mov', 'mp3', 'wav', 'flac', 'flv', '3gp', '3gpp'] },
       { name: 'All Files', extensions: ['*'] }
     ]
   });
@@ -794,6 +794,65 @@ ipcMain.handle('rename-file', async (event, oldPath, newPath) => {
     }
     fs.renameSync(oldPath, newPath);
     return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('move-file-physical', async (event, oldPath, newPath) => {
+  try {
+    if (!oldPath || !newPath) {
+      return { success: false, error: 'مسیر مبدا یا مقصد مشخص نیست.' };
+    }
+    if (!fs.existsSync(oldPath)) {
+      return { success: false, error: 'فایل مبدا وجود ندارد.' };
+    }
+    const destDir = path.dirname(newPath);
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+    
+    // Try fast renaming (works on same drive/partition)
+    try {
+      fs.renameSync(oldPath, newPath);
+      return { success: true };
+    } catch (renameErr) {
+      // If it fails due to cross-drive, copy then delete
+      if (renameErr.code === 'EXDEV' || renameErr.message.includes('cross-device')) {
+        await fs.promises.copyFile(oldPath, newPath);
+        await fs.promises.unlink(oldPath);
+        return { success: true };
+      } else {
+        throw renameErr;
+      }
+    }
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('get-disk-space', async (event, dirPath) => {
+  try {
+    if (!dirPath) {
+      return { success: false, error: 'مسیر مشخص نشده است.' };
+    }
+    if (!fs.existsSync(dirPath)) {
+      return { success: false, error: 'مسیر وجود ندارد.' };
+    }
+    
+    if (typeof fs.statfsSync === 'function') {
+      const stats = fs.statfsSync(dirPath);
+      const totalBytes = Number(stats.bsize) * Number(stats.blocks);
+      const freeBytes = Number(stats.bsize) * Number(stats.bavail);
+      return {
+        success: true,
+        totalBytes,
+        freeBytes,
+        usedBytes: totalBytes - freeBytes
+      };
+    } else {
+      return { success: false, error: 'متد بررسی فضای دیسک در این نسخه پشتیبانی نمی‌شود.' };
+    }
   } catch (err) {
     return { success: false, error: err.message };
   }
@@ -1885,6 +1944,15 @@ ipcMain.handle('save-poster-local', async (event, imageUrl, destFolder, filename
     const extension = path.extname(imageUrl.split('?')[0]) || '.jpg';
     const finalFilename = (filename || 'poster') + extension;
     const finalFullPath = path.join(targetDir, finalFilename);
+
+    // Bypassing redundant downloads if the image already exists
+    if (fs.existsSync(finalFullPath)) {
+      const stats = fs.statSync(finalFullPath);
+      if (stats.size > 0) {
+        console.log(`Poster already exists, skipping download: ${finalFullPath}`);
+        return { success: true, savedPath: finalFullPath };
+      }
+    }
 
     const response = await fetch(imageUrl);
     if (!response.ok) {

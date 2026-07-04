@@ -1530,7 +1530,7 @@ export default function SeriesPage({
         .replace(/[^a-zA-Z0-9\s-_]/g, '') // remove special characters
         .replace(/\s+/g, '-'); // replace spaces with hyphens
 
-      const seasonNum = currentSeason.seasonNumber || 1;
+      const seasonNum = (currentSeason as any).seasonNumber || (managingSeries.seasons.indexOf(currentSeason) + 1);
       const sStr = seasonNum.toString().padStart(2, '0');
 
       // Create a cloned version of seasons list
@@ -1611,6 +1611,108 @@ export default function SeriesPage({
     } catch (err: any) {
       console.error('Error auto renaming files:', err);
       showToast('بروز خطا در هنگام تغییر نام فایل‌ها: ' + err.message, 'error');
+    }
+  };
+
+  const handleAutoRenameAllSeasonsOfSeries = async (targetSeries: Series) => {
+    if (!targetSeries) return;
+
+    if (!window.confirm(`آیا مطمئن هستید که می‌خواهید نام فیزیکی تمامی فایل‌های ویدئویی تمامی فصول این سریال (${targetSeries.titleFa}) را به فرمت استاندارد (مثلاً ${targetSeries.titleEn || 'Series'}-S01E01) تغییر نام دهید؟ این عملیات فایل‌های واقعی روی هارد دیسک را تغییر نام خواهد داد.`)) {
+      return;
+    }
+
+    try {
+      showToast('در حال تغییر نام فیزیکی فایل‌های تمامی فصول...', 'info');
+      let successRenames = 0;
+      let failedRenames = 0;
+
+      const rawTitle = targetSeries.titleEn || targetSeries.titleFa || 'Series';
+      const cleanTitle = rawTitle
+        .trim()
+        .replace(/[^a-zA-Z0-9\s-_]/g, '')
+        .replace(/\s+/g, '-');
+
+      const updatedSeasonsList = JSON.parse(JSON.stringify(targetSeries.seasons || [])) as Season[];
+
+      for (const s of updatedSeasonsList) {
+        const seasonNum = (s as any).seasonNumber || (updatedSeasonsList.indexOf(s) + 1);
+        const sStr = seasonNum.toString().padStart(2, '0');
+
+        for (const ep of s.episodes || []) {
+          const oldPath = ep.videoPath;
+          if (!oldPath) continue;
+
+          // Check if file actually exists
+          const check = window.electronAPI && window.electronAPI.existsFile ? await window.electronAPI.existsFile(oldPath) : null;
+          if (!check || !check.exists) {
+            continue;
+          }
+
+          // Get extension
+          const extIdx = oldPath.lastIndexOf('.');
+          const ext = extIdx !== -1 ? oldPath.substring(extIdx).toLowerCase() : '.mkv';
+
+          // Extract folder path
+          const lastSlash = Math.max(oldPath.lastIndexOf('\\'), oldPath.lastIndexOf('/'));
+          const folder = oldPath.substring(0, lastSlash + 1);
+          const originalFileName = oldPath.substring(lastSlash + 1);
+
+          // Try to extract quality
+          let qualitySuffix = '';
+          const qualMatch = originalFileName.match(/(1080|720|480)/);
+          if (qualMatch) {
+            qualitySuffix = `-${qualMatch[1]}`;
+          } else if (targetSeries.quality) {
+            const sQualMatch = targetSeries.quality.match(/(1080|720|480)/);
+            if (sQualMatch) {
+              qualitySuffix = `-${sQualMatch[1]}`;
+            }
+          }
+
+          const eStr = (ep.episodeNumber || 1).toString().padStart(2, '0');
+          const newFileName = `${cleanTitle}-S${sStr}E${eStr}${qualitySuffix}${ext}`;
+          const newPath = folder + newFileName;
+
+          if (oldPath.toLowerCase() !== newPath.toLowerCase()) {
+            if (window.electronAPI && window.electronAPI.renameFile) {
+              const renameRes = await window.electronAPI.renameFile(oldPath, newPath);
+              if (renameRes && renameRes.success) {
+                ep.videoPath = newPath;
+                successRenames++;
+              } else {
+                failedRenames++;
+              }
+            }
+          } else if (oldPath !== newPath) {
+            if (window.electronAPI && window.electronAPI.renameFile) {
+              const renameRes = await window.electronAPI.renameFile(oldPath, newPath);
+              if (renameRes && renameRes.success) {
+                ep.videoPath = newPath;
+                successRenames++;
+              }
+            }
+          }
+        }
+      }
+
+      if (successRenames > 0 || failedRenames > 0) {
+        dbService.updateSeries(targetSeries.id, { seasons: updatedSeasonsList });
+        refreshData();
+        // Update local detail/managing states if they match
+        if (detailSeries && detailSeries.id === targetSeries.id) {
+          const updated = dbService.getSeries().find(s => s.id === targetSeries.id);
+          if (updated) setDetailSeries(updated);
+        }
+        if (managingSeries && managingSeries.id === targetSeries.id) {
+          const updated = dbService.getSeries().find(s => s.id === targetSeries.id);
+          if (updated) setManagingSeries(updated);
+        }
+        showAlert(`عملیات تغییر نام به اتمام رسید.\nتعداد ${successRenames} فایل با موفقیت تغییر نام یافتند.\nتعداد ${failedRenames} خطا رخ داد.`, 'success', 'تغییر نام فیزیکی فایل‌ها');
+      } else {
+        showAlert('تمامی فایل‌ها از قبل نام‌گذاری استاندارد داشتند یا فایلی روی دیسک یافت نشد.', 'info', 'اطلاع');
+      }
+    } catch (err: any) {
+      showToast('خطا در تغییر نام فایل‌ها: ' + err.message, 'error');
     }
   };
 
@@ -2017,6 +2119,7 @@ export default function SeriesPage({
                   <option value="دوبله فارسی">دوبله فارسی</option>
                   <option value="زبان اصلی">زبان اصلی</option>
                   <option value="دوزبانه (دوبله و زبان اصلی)">دوزبانه (دوبله و زبان اصلی)</option>
+                  <option value="ایرانی (زبان اصلی فارسی)">ایرانی (زبان اصلی فارسی)</option>
                 </select>
               </div>
 
@@ -2188,8 +2291,8 @@ export default function SeriesPage({
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <div className="flex flex-wrap gap-1">
                           {series.isEnded && (
-                            <span className="text-[9px] bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400 px-1.5 py-0.5 rounded font-bold shrink-0 animate-pulse border border-red-200 dark:border-red-900/30">
-                              🎬 {series.isEndedText || 'پایان یافته'}
+                            <span className="text-[9px] bg-rose-50 text-rose-600 dark:bg-rose-950/35 dark:text-rose-400 px-1.5 py-0.5 rounded font-bold shrink-0 border border-rose-100 dark:border-rose-900/35">
+                              {series.isEndedText || 'پایان یافته'}
                             </span>
                           )}
                           {(series.category || 'متفرقه').split(',').map(cat => (
@@ -2899,6 +3002,7 @@ export default function SeriesPage({
                     <option value="دوبله فارسی">دوبله فارسی</option>
                     <option value="زبان اصلی">زبان اصلی</option>
                     <option value="دوزبانه (دوبله و زبان اصلی)">دوزبانه (دوبله و زبان اصلی)</option>
+                    <option value="ایرانی (زبان اصلی فارسی)">ایرانی (زبان اصلی فارسی)</option>
                   </select>
                 </div>
 
@@ -3399,6 +3503,15 @@ export default function SeriesPage({
                   >
                     <ListOrdered className="w-3.5 h-3.5" />
                     <span>فصل‌ها و قسمت‌ها</span>
+                  </button>
+                  <button
+                    onClick={() => handleAutoRenameAllSeasonsOfSeries(detailSeries)}
+                    className="p-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg cursor-pointer flex items-center justify-center gap-1.5 font-bold text-xs px-3"
+                    title="تغییر نام فیزیکی تمامی فایل‌های این سریال"
+                    id="btn-series-detail-autorename"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-200 animate-pulse" />
+                    <span>تغییر نام منظم فایل‌ها</span>
                   </button>
                   <button
                     onClick={() => { handleExportSingleSeriesJson(detailSeries); }}

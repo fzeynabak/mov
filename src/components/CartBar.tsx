@@ -29,7 +29,8 @@ import {
   HardDrive,
   Copy,
   Check,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 
 interface CartBarProps {
@@ -48,6 +49,7 @@ interface CartBarProps {
   onAddSession: (customerName?: string) => void;
   onCloseSession: (id: string) => void;
   onUpdateDrivePath: (drivePath: string) => void;
+  onUpdateDriveCapacity: (capacity: number) => void;
 }
 
 export default function CartBar({
@@ -64,7 +66,8 @@ export default function CartBar({
   onSelectSession,
   onAddSession,
   onCloseSession,
-  onUpdateDrivePath
+  onUpdateDrivePath,
+  onUpdateDriveCapacity
 }: CartBarProps) {
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
@@ -708,6 +711,80 @@ export default function CartBar({
         })()}
       </div>
 
+      {/* Dynamic 2-Level USB Copy Progress Panel */}
+      {(() => {
+        const activeCopyingItem = cart.find(item => {
+          const prog = copyProgress[item.id];
+          return prog && !prog.completed && !prog.error;
+        });
+
+        // Show panel if we are actively copying
+        const isCopyingActive = isCopyingAll || activeCopyingItem;
+        if (!isCopyingActive) return null;
+
+        const currentFileProgress = activeCopyingItem ? (copyProgress[activeCopyingItem.id]?.progress || 0) : 0;
+        const speedMbs = activeCopyingItem ? (copyProgress[activeCopyingItem.id]?.speedMbs || 0) : 0;
+        
+        const totalItems = cart.length;
+        const completedItemsCount = cart.filter(item => copyProgress[item.id]?.completed).length;
+        
+        const completedWeight = completedItemsCount * 100;
+        const activeWeight = activeCopyingItem ? currentFileProgress : 0;
+        const overallProgressPercent = totalItems > 0 ? Math.min(100, Math.round((completedWeight + activeWeight) / totalItems)) : 0;
+
+        return (
+          <div className="w-full bg-slate-900/60 dark:bg-slate-950/70 p-4.5 rounded-xl border border-indigo-500/20 flex flex-col gap-4 animate-pulse-slow">
+            {/* Header / Info */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 border-b border-white/5 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+                <span className="text-xs font-extrabold text-gray-200">کپی زنده فایل‌ها به فلش دیسک مشتری</span>
+              </div>
+              <div className="flex items-center gap-4 text-[10px] text-gray-400 font-bold">
+                {speedMbs > 0 && (
+                  <span>سرعت انتقال: <span className="text-emerald-400 font-mono">{toPersianNums(speedMbs.toFixed(1))} MB/s</span></span>
+                )}
+                <span>آیتم‌های تکمیل شده: <span className="text-indigo-400 font-mono">{toPersianNums(completedItemsCount.toString())} از {toPersianNums(totalItems.toString())}</span></span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* 1. Current File Progress */}
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between items-center text-[10px] font-bold">
+                  <span className="text-indigo-300 truncate max-w-[250px]">
+                    {activeCopyingItem ? `فایل فعلی: ${activeCopyingItem.mediaTitle}` : 'درحال آماده‌سازی...'}
+                  </span>
+                  <span className="text-indigo-400 font-mono">{toPersianNums(currentFileProgress.toString())}٪</span>
+                </div>
+                {/* Visual Bar */}
+                <div className="w-full h-2.5 bg-white/5 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-l from-indigo-500 to-cyan-500 rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${currentFileProgress}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* 2. Overall Queue Progress */}
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between items-center text-[10px] font-bold">
+                  <span className="text-emerald-300">کل فایل‌های صف ({toPersianNums(completedItemsCount.toString())} از {toPersianNums(totalItems.toString())})</span>
+                  <span className="text-emerald-400 font-mono">{toPersianNums(overallProgressPercent.toString())}٪</span>
+                </div>
+                {/* Visual Bar */}
+                <div className="w-full h-2.5 bg-white/5 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-l from-emerald-500 to-teal-400 rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${overallProgressPercent}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4.5 shadow-xl border border-indigo-900/60 flex flex-col md:flex-row items-center justify-between gap-4 select-none relative overflow-hidden" id="customer-cart-bar">
       
       {/* Absolute ambient lights */}
@@ -795,6 +872,22 @@ export default function CartBar({
               </span>
             )}
           </button>
+
+          {cart.length > 0 && (
+            <button
+              onClick={handleCopyAllToUsb}
+              disabled={isCopyingAll}
+              className={`h-11 px-4 rounded-xl text-xs font-black flex items-center gap-2.5 transition-all cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/30 ring-2 ring-emerald-500/25 active:scale-95 disabled:opacity-50`}
+              id="btn-copy-all-flash-bottom"
+            >
+              {isCopyingAll ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <HardDrive className="w-4 h-4" />
+              )}
+              <span>کپی به فلش</span>
+            </button>
+          )}
         </div>
       </div>
 

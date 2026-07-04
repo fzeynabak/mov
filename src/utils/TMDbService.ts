@@ -65,11 +65,20 @@ export class TMDbService {
       url.searchParams.set('api_key', apiKey);
     }
 
-    const res = await fetch(url.toString(), { headers });
-    if (!res.ok) {
-      throw new Error(`TMDb HTTP error ${res.status}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    try {
+      const res = await fetch(url.toString(), { headers, signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        throw new Error(`TMDb HTTP error ${res.status}`);
+      }
+      return await res.json();
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      throw fetchErr;
     }
-    return await res.json();
   }
 
   /**
